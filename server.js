@@ -1,5 +1,4 @@
 const express = require("express");
-const cheerio = require("cheerio");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -21,32 +20,56 @@ app.get("/rankings", async (req, res) => {
         const response = await fetch("https://mutualify.stanr.info/rankings?page=1");
         const html = await response.text();
 
-        const $ = cheerio.load(html);
+        // 🔍 DEBUG CHECK (IMPORTANT)
+        if (!html || html.length < 1000) {
+            return res.json({
+                error: "Empty or blocked response from Mutualify",
+                hint: "Render may be blocked or site is JS-rendered"
+            });
+        }
+
+        // 🧠 Simple regex-based fallback scraping (more stable than cheerio here)
+        const rows = [...html.matchAll(/<tr[^>]*>(.*?)<\/tr>/gs)];
 
         let players = [];
 
-        $("tr").each((i, el) => {
-            const cols = $(el).find("td");
-            if (cols.length < 3) return;
+        for (const row of rows) {
+            const text = row[1];
 
-            const name = $(cols[1]).text().trim();
-            const raw = $(cols[2]).text().replace(/[^0-9]/g, "");
-            const mutuals = parseInt(raw);
+            const nameMatch = text.match(/<td[^>]*>(.*?)<\/td>/g);
 
-            if (name && !isNaN(mutuals)) {
-                players.push({
-                    username: name,
-                    mutuals: mutuals,
-                    rarity: getRarity(mutuals)
-                });
-            }
-        });
+            if (!nameMatch || nameMatch.length < 3) continue;
+
+            const name = nameMatch[1]?.replace(/<[^>]+>/g, "").trim();
+            const mutualsRaw = nameMatch[2]?.replace(/<[^>]+>/g, "").trim();
+            const mutuals = parseInt(mutualsRaw.replace(/[^0-9]/g, ""));
+
+            if (!name || isNaN(mutuals)) continue;
+
+            players.push({
+                username: name,
+                mutuals: mutuals,
+                rarity: getRarity(mutuals)
+            });
+        }
+
+        // If still empty, return debug info
+        if (players.length === 0) {
+            return res.json({
+                error: "No players parsed",
+                hint: "Site structure likely changed or is JS-rendered",
+                rawPreview: html.slice(0, 500)
+            });
+        }
 
         res.json(players);
 
     } catch (err) {
         console.log(err);
-        res.status(500).send("scraping failed");
+        res.status(500).json({
+            error: "Scraping failed",
+            details: err.toString()
+        });
     }
 });
 
