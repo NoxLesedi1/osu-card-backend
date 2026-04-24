@@ -1,5 +1,5 @@
 const express = require("express");
-const puppeteer = require("puppeteer");
+const cheerio = require("cheerio");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -12,68 +12,44 @@ function getRarity(mutuals) {
     return "Common";
 }
 
+app.get("/", (req, res) => {
+    res.send("OSU Card Backend Running");
+});
+
 app.get("/rankings", async (req, res) => {
-    let browser;
-
     try {
-        browser = await puppeteer.launch({
-            headless: "new"
+        const response = await fetch("https://mutualify.stanr.info/rankings?page=1");
+        const html = await response.text();
+
+        const $ = cheerio.load(html);
+
+        let players = [];
+
+        $("tr").each((i, el) => {
+            const cols = $(el).find("td");
+            if (cols.length < 3) return;
+
+            const name = $(cols[1]).text().trim();
+            const raw = $(cols[2]).text().replace(/[^0-9]/g, "");
+            const mutuals = parseInt(raw);
+
+            if (name && !isNaN(mutuals)) {
+                players.push({
+                    username: name,
+                    mutuals: mutuals,
+                    rarity: getRarity(mutuals)
+                });
+            }
         });
 
-        const page = await browser.newPage();
-
-        await page.goto(
-            "https://mutualify.stanr.info/rankings?page=1",
-            { waitUntil: "networkidle2" }
-        );
-
-        const players = await page.evaluate(() => {
-            const rows = document.querySelectorAll("table tbody tr");
-
-            let data = [];
-
-            rows.forEach(row => {
-                const cols = row.querySelectorAll("td");
-
-                const name = cols[1]?.innerText?.trim();
-                const mutuals = parseInt(cols[2]?.innerText?.trim());
-
-                if (name && !isNaN(mutuals)) {
-                    data.push({
-                        username: name,
-                        mutuals: mutuals
-                    });
-                }
-            });
-
-            return data;
-        });
-
-        await browser.close();
-
-        // Apply rarity AFTER scraping (cleaner + safer)
-        const finalData = players.map(p => ({
-            username: p.username,
-            mutuals: p.mutuals,
-            rarity: getRarity(p.mutuals)
-        }));
-
-        // Sort highest mutuals first
-        finalData.sort((a, b) => b.mutuals - a.mutuals);
-
-        res.json(finalData);
+        res.json(players);
 
     } catch (err) {
         console.log(err);
-
-        if (browser) await browser.close();
-
-        res.status(500).json({
-            error: "Scraping failed"
-        });
+        res.status(500).send("scraping failed");
     }
 });
 
 app.listen(PORT, () => {
-    console.log("Server running on http://localhost:" + PORT);
+    console.log("Server running on port " + PORT);
 });
